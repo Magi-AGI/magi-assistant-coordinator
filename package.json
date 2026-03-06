@@ -1,0 +1,32 @@
+{
+  "name": "magi-assistant-coordinator",
+  "version": "0.1.0",
+  "description": "WebSocket coordinator for Magi Assistant smart glasses — terminal multiplexer over Tailscale",
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "mock-client": "tsx tools/mock-client.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@xterm/headless": "^6.0.0",
+    "dotenv": "^17.3.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
