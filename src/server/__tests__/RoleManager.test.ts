@@ -19,7 +19,7 @@ describe('RoleManager', () => {
   let rm: RoleManager;
 
   beforeEach(() => {
-    rm = new RoleManager();
+    rm = new RoleManager(0); // graceMs=0 for instant auto-promote in existing tests
   });
 
   it('first client gets operator', () => {

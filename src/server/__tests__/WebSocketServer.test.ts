@@ -23,6 +23,8 @@ function testConfig(port: number): Config {
     backpressureBytes: 1024 * 1024,
     stt: defaultSttConfig(),
     classification: { autoSendConfidence: 0.9 },
+    graceDisconnectMs: 0,   // instant auto-promote in tests
+    idleTimeoutMs: 300_000,
   };
 }
 
@@ -31,6 +33,8 @@ function mockSessionProvider(): SessionProvider & {
   inputCalls: { sessionId: string; text: string }[];
   rawCalls: { sessionId: string; data: string }[];
   signalCalls: { sessionId: string; signal: string }[];
+  resizeCalls: { cols: number; rows: number }[];
+  clientCount: number;
 } {
   const sessions: SessionInfo[] = [
     { id: 'sess-1', name: 'main', state: 'running' },
@@ -40,6 +44,8 @@ function mockSessionProvider(): SessionProvider & {
     inputCalls: [],
     rawCalls: [],
     signalCalls: [],
+    resizeCalls: [],
+    clientCount: 0,
     listSessions: () => sessions,
     getDefaultSessionId: () => 'sess-1',
     getLatestSnapshot: () => null,
@@ -51,6 +57,15 @@ function mockSessionProvider(): SessionProvider & {
     },
     sendSignal(sessionId, signal) {
       this.signalCalls.push({ sessionId, signal });
+    },
+    resizeAll(cols, rows) {
+      this.resizeCalls.push({ cols, rows });
+    },
+    clientConnected(_clientId: string) {
+      this.clientCount++;
+    },
+    clientDisconnected(_clientId: string) {
+      this.clientCount--;
     },
   };
 }
@@ -113,7 +128,7 @@ function connectClient(port: number): Promise<{
 }
 
 /** Get a random port to avoid collisions between tests. */
-let nextPort = 19100;
+let nextPort = 19100 + Math.floor(Math.random() * 1000);
 function getPort(): number {
   return nextPort++;
 }
@@ -505,5 +520,126 @@ describe('WebSocketServer integration', () => {
 
     c1.close();
     c2.close();
+  });
+});
+
+describe('Grace-period emergency signals', () => {
+  let server: WebSocketServer;
+  let provider: ReturnType<typeof mockSessionProvider>;
+  let port: number;
+
+  beforeEach(() => {
+    port = getPort();
+    provider = mockSessionProvider();
+    // Use a long grace period so the timer doesn't fire during the test
+    const cfg = testConfig(port);
+    cfg.graceDisconnectMs = 60_000;
+    server = new WebSocketServer(cfg, provider);
+    server.start();
+  });
+
+  afterEach(() => {
+    server.stop();
+  });
+
+  it('viewer can send session.signal during grace period (no operator)', async () => {
+    // Glasses = operator
+    const glasses = await connectClient(port);
+    glasses.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 80, rows: 24 },
+      deviceType: 'glasses',
+    });
+    await glasses.waitForMessage(m => m.type === 'hello.ok');
+
+    // Phone = viewer
+    const phone = await connectClient(port);
+    phone.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 120, rows: 40 },
+      deviceType: 'phone',
+    });
+    await phone.waitForMessage(m => m.type === 'hello.ok');
+
+    // Operator disconnects → grace period starts (no auto-promote yet)
+    glasses.close();
+    await phone.waitForMessage(m => m.type === 'client.left');
+
+    // Viewer sends session.signal during grace — should succeed
+    phone.send({ type: 'session.signal', sessionId: 'sess-1', signal: 'SIGINT' });
+    const accepted = await phone.waitForMessage(m => m.type === 'signal.accepted');
+    expect((accepted as any).sessionId).toBe('sess-1');
+    expect((accepted as any).signal).toBe('SIGINT');
+
+    expect(provider.signalCalls).toContainEqual({ sessionId: 'sess-1', signal: 'SIGINT' });
+
+    phone.close();
+  });
+
+  it('viewer cannot send session.input during grace period', async () => {
+    // Glasses = operator
+    const glasses = await connectClient(port);
+    glasses.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 80, rows: 24 },
+      deviceType: 'glasses',
+    });
+    await glasses.waitForMessage(m => m.type === 'hello.ok');
+
+    // Phone = viewer
+    const phone = await connectClient(port);
+    phone.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 120, rows: 40 },
+      deviceType: 'phone',
+    });
+    await phone.waitForMessage(m => m.type === 'hello.ok');
+
+    // Operator disconnects → grace period
+    glasses.close();
+    await phone.waitForMessage(m => m.type === 'client.left');
+
+    // Viewer sends session.input during grace — should be rejected
+    phone.send({ type: 'session.input', sessionId: 'sess-1', text: 'hello', source: 'keyboard' });
+    const err = await phone.waitForMessage(m => m.type === 'error');
+    expect((err as any).code).toBe('NOT_OPERATOR');
+    expect(provider.inputCalls).toHaveLength(0);
+
+    phone.close();
+  });
+
+  it('viewer signal is blocked when operator exists', async () => {
+    // Glasses = operator (stays connected)
+    const glasses = await connectClient(port);
+    glasses.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 80, rows: 24 },
+      deviceType: 'glasses',
+    });
+    await glasses.waitForMessage(m => m.type === 'hello.ok');
+
+    // Phone = viewer
+    const phone = await connectClient(port);
+    phone.send({
+      type: 'client.hello',
+      token: 'test-token',
+      grid: { cols: 120, rows: 40 },
+      deviceType: 'phone',
+    });
+    await phone.waitForMessage(m => m.type === 'hello.ok');
+
+    // Viewer sends signal while operator is connected — should fail
+    phone.send({ type: 'session.signal', sessionId: 'sess-1', signal: 'SIGINT' });
+    const err = await phone.waitForMessage(m => m.type === 'error');
+    expect((err as any).code).toBe('NOT_OPERATOR');
+    expect(provider.signalCalls).toHaveLength(0);
+
+    glasses.close();
+    phone.close();
   });
 });

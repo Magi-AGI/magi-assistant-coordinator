@@ -14,6 +14,7 @@ export class Session {
   private _exitCode: number | null = null;
   private _latestSnapshot: SessionScreen | null = null;
   private _onSnapshot: ((snapshot: SessionScreen) => void) | null = null;
+  private _onExit: ((sessionId: string, code: number) => void) | null = null;
 
   constructor(sessionConfig: SessionConfig, private readonly config: Config) {
     this.id = sessionConfig.id;
@@ -77,12 +78,19 @@ export class Session {
       // Force a final snapshot
       this._latestSnapshot = this.pipeline.forceSnapshot();
       this._onSnapshot?.(this._latestSnapshot);
+      this._onExit?.(this.id, code);
     };
   }
 
   set onSnapshot(cb: ((snapshot: SessionScreen) => void) | null) {
     this._onSnapshot = cb;
   }
+
+  set onExit(cb: ((sessionId: string, code: number) => void) | null) {
+    this._onExit = cb;
+  }
+
+  get exitCode(): number | null { return this._exitCode; }
 
   start(): void {
     this.ptyHost.spawn();

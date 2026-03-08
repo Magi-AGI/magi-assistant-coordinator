@@ -33,6 +33,9 @@ export interface Config {
   // Phase 1
   stt: SttConfig;
   classification: ClassificationConfig;
+  // Phase 3
+  graceDisconnectMs: number;
+  idleTimeoutMs: number;
 }
 
 export function loadConfig(): Config {
@@ -83,5 +86,7 @@ export function loadConfig(): Config {
     classification: {
       autoSendConfidence: parseFloat(process.env.MAGI_AUTO_SEND_CONFIDENCE || '0.9'),
     },
+    graceDisconnectMs: parseInt(process.env.MAGI_GRACE_DISCONNECT_MS || '5000', 10),
+    idleTimeoutMs: parseInt(process.env.MAGI_IDLE_TIMEOUT_MS || '300000', 10),
   };
 }

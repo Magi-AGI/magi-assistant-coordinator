@@ -13,12 +13,15 @@ export interface SessionProvider {
   writeInput(sessionId: string, text: string): void;
   writeRaw(sessionId: string, data: string): void;
   sendSignal(sessionId: string, signal: 'SIGINT' | 'SIGKILL'): void;
+  resizeAll(cols: number, rows: number): void;
+  clientConnected(clientId: string): void;
+  clientDisconnected(clientId: string): void;
 }
 
 export class WebSocketServer {
   private wss: WsServer | null = null;
   private clients = new Map<string, ClientConnection>();
-  private roleManager = new RoleManager();
+  private roleManager: RoleManager;
 
   private sttBridge: SttBridge | null = null;
   private classifier: CommandClassifier | null = null;
@@ -26,7 +29,17 @@ export class WebSocketServer {
   constructor(
     private readonly config: Config,
     private sessionProvider: SessionProvider,
-  ) {}
+  ) {
+    this.roleManager = new RoleManager(config.graceDisconnectMs);
+    this.roleManager.onAutoPromote = (promoted) => {
+      promoted.send({
+        type: 'role.granted',
+        role: 'operator',
+        roleVersion: this.roleManager.roleVersion,
+      });
+      this.resizeToOperator();
+    };
+  }
 
   setSttBridge(bridge: SttBridge): void {
     this.sttBridge = bridge;
@@ -70,7 +83,7 @@ export class WebSocketServer {
     this.clients.delete(client.id);
 
     if (client.authenticated) {
-      // Handle role transfer on disconnect
+      // Handle role transfer on disconnect (may be deferred by grace timer)
       const promoted = this.roleManager.removeClient(client.id);
 
       // Broadcast client.left to remaining clients
@@ -79,14 +92,17 @@ export class WebSocketServer {
         clientId: client.id,
       });
 
-      // Notify promoted client
+      // Notify promoted client (only when graceMs=0, otherwise handled by onAutoPromote callback)
       if (promoted) {
         promoted.send({
           type: 'role.granted',
           role: 'operator',
           roleVersion: this.roleManager.roleVersion,
         });
+        this.resizeToOperator();
       }
+
+      this.sessionProvider.clientDisconnected(client.id);
     }
 
     console.log(`[ws] Client disconnected: ${client.id}`);
@@ -125,13 +141,17 @@ export class WebSocketServer {
         break;
       case 'client.grid':
         client.updateGrid(msg.cols, msg.rows);
+        // Only operator's grid drives PTY resize
+        if (this.roleManager.isOperator(client.id)) {
+          this.sessionProvider.resizeAll(msg.cols, msg.rows);
+        }
         break;
       case 'session.input':
         if (!this.requireOperator(client)) return;
         this.handleSessionInput(client, msg.sessionId, msg.text, msg.source);
         break;
       case 'session.signal':
-        if (!this.requireOperator(client)) return;
+        if (!this.requireOperatorOrNoOperator(client)) return;
         this.handleSessionSignal(client, msg.sessionId, msg.signal);
         break;
       case 'input.confirm':
@@ -165,6 +185,15 @@ export class WebSocketServer {
   /** Returns true if client is operator. Sends NOT_OPERATOR error if not. */
   private requireOperator(client: ClientConnection): boolean {
     if (this.roleManager.isOperator(client.id)) return true;
+    client.sendError('NOT_OPERATOR', 'Only the operator can perform this action');
+    return false;
+  }
+
+  /** Returns true if client is operator OR there is no operator (grace period).
+   *  Allows emergency signals when operator is disconnected. */
+  private requireOperatorOrNoOperator(client: ClientConnection): boolean {
+    if (this.roleManager.isOperator(client.id)) return true;
+    if (this.roleManager.hasNoOperator()) return true;
     client.sendError('NOT_OPERATOR', 'Only the operator can perform this action');
     return false;
   }
@@ -215,6 +244,13 @@ export class WebSocketServer {
       role,
     });
 
+    this.sessionProvider.clientConnected(client.id);
+
+    // If this client is operator, resize PTY to their grid
+    if (role === 'operator') {
+      this.sessionProvider.resizeAll(cols, rows);
+    }
+
     console.log(`[ws] Client authenticated: ${client.id} (${cols}x${rows}, ${client.deviceType}, ${role})`);
   }
 
@@ -246,6 +282,9 @@ export class WebSocketServer {
         roleVersion: this.roleManager.roleVersion,
       });
     }
+
+    // Resize PTY to new operator's grid
+    this.resizeToOperator();
   }
 
   /** Clean up audio stream for a client (used when role is revoked). */
@@ -311,6 +350,7 @@ export class WebSocketServer {
   ): void {
     try {
       this.sessionProvider.sendSignal(sessionId, signal);
+      client.send({ type: 'signal.accepted', sessionId, signal });
       console.log(`[ws] Signal ${signal} to session ${sessionId}`);
     } catch (e: any) {
       client.sendError('SESSION_ERROR', e.message);
@@ -441,6 +481,23 @@ export class WebSocketServer {
     }
   }
 
+  /** Resize all sessions to the current operator's grid dimensions. */
+  private resizeToOperator(): void {
+    const operator = this.roleManager.getAllClients().find(c => c.role === 'operator');
+    if (operator) {
+      this.sessionProvider.resizeAll(operator.cols, operator.rows);
+    }
+  }
+
+  /** Broadcast session.exited to ALL authenticated clients (global, per Codex #4). */
+  broadcastSessionExited(sessionId: string, exitCode: number): void {
+    this.broadcast({
+      type: 'session.exited',
+      sessionId,
+      exitCode,
+    });
+  }
+
   /** Broadcast a snapshot to all authenticated clients viewing the given session. */
   broadcastSnapshot(snapshot: SessionScreen): void {
     for (const client of this.clients.values()) {
@@ -476,6 +533,7 @@ export class WebSocketServer {
   }
 
   stop(): void {
+    this.roleManager.cancelGrace();
     for (const client of this.clients.values()) {
       client.close();
     }

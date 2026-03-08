@@ -23,6 +23,11 @@ sessionManager.onSnapshot = (snapshot) => {
   wsServer.broadcastSnapshot(snapshot);
 };
 
+// Wire session exit broadcast: session → all WebSocket clients
+sessionManager.onSessionExit = (sessionId, exitCode) => {
+  wsServer.broadcastSessionExited(sessionId, exitCode);
+};
+
 // Start
 async function start() {
   await sttBridge.init();

@@ -186,6 +186,18 @@ export interface ClientLeft {
   clientId: string;
 }
 
+export interface SignalAccepted {
+  type: 'signal.accepted';
+  sessionId: string;
+  signal: 'SIGINT' | 'SIGKILL';
+}
+
+export interface SessionExited {
+  type: 'session.exited';
+  sessionId: string;
+  exitCode: number;
+}
+
 export type ServerMessage =
   | HelloOk
   | SessionScreen
@@ -199,4 +211,6 @@ export type ServerMessage =
   | RoleGranted
   | RoleRevoked
   | ClientJoined
-  | ClientLeft;
+  | ClientLeft
+  | SignalAccepted
+  | SessionExited;
