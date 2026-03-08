@@ -54,6 +54,11 @@ export class PtyHost {
 
   get paused(): boolean { return this._paused; }
 
+  /** Get the PID of the PTY process. */
+  getPid(): number | null {
+    return this.process?.pid ?? null;
+  }
+
   /** Debounced resize — waits 500ms after last call. */
   resize(cols: number, rows: number): void {
     if (this.resizeTimer) clearTimeout(this.resizeTimer);
@@ -74,8 +79,23 @@ export class PtyHost {
   }
 
   kill(signal?: string): void {
+    if (!this.process) return;
+
     try {
-      this.process?.kill(signal);
+      // For SIGKILL, try to kill the process group to ensure child processes die too.
+      // node-pty's kill() may only kill the shell, leaving children orphaned.
+      if (signal === 'SIGKILL') {
+        const pid = this.process.pid;
+        try {
+          // Kill entire process group (negative PID)
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // Fallback: process group kill may fail if PID is not a group leader
+          this.process.kill(signal);
+        }
+      } else {
+        this.process.kill(signal);
+      }
     } catch {
       // Already dead
     }

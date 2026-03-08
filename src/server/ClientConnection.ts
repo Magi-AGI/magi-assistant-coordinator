@@ -1,5 +1,10 @@
 import type { WebSocket } from 'ws';
-import type { ServerMessage } from '../types/protocol.js';
+import type { DeviceType, Role, ServerMessage } from '../types/protocol.js';
+
+export interface SttStream {
+  write(pcm: Buffer): void;
+  end(): void;
+}
 
 export class ClientConnection {
   readonly id: string;
@@ -7,6 +12,19 @@ export class ClientConnection {
   cols = 80;
   rows = 24;
   activeSessionId: string | null = null;
+
+  // Role system
+  role: Role = 'viewer';
+  deviceType: DeviceType = 'glasses';
+
+  // Audio stream state
+  audioStream: SttStream | null = null;
+  audioSessionId: string | null = null;
+  pendingTranscript: { text: string; seq: number; sessionId: string } | null = null;
+  private _transcriptSeq = 0;
+  private audioTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private audioTimeoutCb: (() => void) | null = null;
+  private audioTimeoutMs = 60_000;
 
   private authTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -50,10 +68,40 @@ export class ClientConnection {
     this.send({ type: 'error', code, message });
   }
 
+  nextTranscriptSeq(): number {
+    return ++this._transcriptSeq;
+  }
+
+  startAudioTimeout(onTimeout: () => void, timeoutMs = 60_000): void {
+    this.clearAudioTimeout();
+    this.audioTimeoutCb = onTimeout;
+    this.audioTimeoutMs = timeoutMs;
+    this.audioTimeoutTimer = setTimeout(onTimeout, timeoutMs);
+  }
+
+  resetAudioTimeout(): void {
+    if (this.audioTimeoutCb) {
+      this.clearAudioTimeout();
+      this.audioTimeoutTimer = setTimeout(this.audioTimeoutCb, this.audioTimeoutMs);
+    }
+  }
+
+  clearAudioTimeout(): void {
+    if (this.audioTimeoutTimer) {
+      clearTimeout(this.audioTimeoutTimer);
+      this.audioTimeoutTimer = null;
+    }
+  }
+
   close(): void {
     if (this.authTimer) {
       clearTimeout(this.authTimer);
       this.authTimer = null;
+    }
+    this.clearAudioTimeout();
+    if (this.audioStream) {
+      this.audioStream.end();
+      this.audioStream = null;
     }
     this.ws.close();
   }

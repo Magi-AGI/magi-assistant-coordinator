@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import type { SttConfig } from './stt/types.js';
+import { defaultSttConfig } from './stt/types.js';
 
 export interface SessionConfig {
   id: string;
@@ -6,6 +8,12 @@ export interface SessionConfig {
   shell: string;
   args: string[];
   cwd: string;
+}
+
+export interface ClassificationConfig {
+  denyPatterns?: string[];
+  confirmPatterns?: string[];
+  autoSendConfidence: number;
 }
 
 export interface Config {
@@ -22,6 +30,9 @@ export interface Config {
   debounceMs: number;
   renderBudgetMs: number;
   backpressureBytes: number;
+  // Phase 1
+  stt: SttConfig;
+  classification: ClassificationConfig;
 }
 
 export function loadConfig(): Config {
@@ -42,6 +53,19 @@ export function loadConfig(): Config {
     }
   }
 
+  // Build STT config from env vars
+  const stt = defaultSttConfig();
+  if (process.env.MAGI_STT_ENABLED === 'true') {
+    stt.enabled = true;
+    stt.googleCloud.projectId = process.env.MAGI_STT_PROJECT_ID || '';
+    stt.googleCloud.keyFile = process.env.MAGI_STT_KEY_FILE || '';
+    stt.googleCloud.model = process.env.MAGI_STT_MODEL || 'latest_long';
+    stt.googleCloud.languageCode = process.env.MAGI_STT_LANGUAGE || 'en-US';
+    if (process.env.MAGI_STT_PHRASE_HINTS) {
+      stt.googleCloud.phraseHints = process.env.MAGI_STT_PHRASE_HINTS.split(',');
+    }
+  }
+
   return {
     port: parseInt(process.env.MAGI_PORT || '9100', 10),
     token,
@@ -55,5 +79,9 @@ export function loadConfig(): Config {
     debounceMs: 50,
     renderBudgetMs: 10,
     backpressureBytes: 1024 * 1024, // 1MB
+    stt,
+    classification: {
+      autoSendConfidence: parseFloat(process.env.MAGI_AUTO_SEND_CONFIDENCE || '0.9'),
+    },
   };
 }

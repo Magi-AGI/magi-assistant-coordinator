@@ -49,6 +49,24 @@ export class SessionManager implements SessionProvider {
     return this.sessions.get(sessionId)?.getLatestSnapshot() ?? null;
   }
 
+  writeInput(sessionId: string, text: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session with id: ${sessionId}`);
+    session.writeInput(text);
+  }
+
+  writeRaw(sessionId: string, data: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session with id: ${sessionId}`);
+    session.writeRaw(data);
+  }
+
+  sendSignal(sessionId: string, signal: 'SIGINT' | 'SIGKILL'): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session with id: ${sessionId}`);
+    session.sendSignal(signal);
+  }
+
   stopAll(): void {
     for (const session of this.sessions.values()) {
       session.dispose();

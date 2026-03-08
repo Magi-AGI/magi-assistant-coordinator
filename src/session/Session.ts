@@ -101,6 +101,32 @@ export class Session {
     return this.pipeline.forceSnapshot();
   }
 
+  writeInput(text: string): void {
+    if (this._state === 'exited') {
+      throw new Error(`Session ${this.id} has exited`);
+    }
+    this.ptyHost.write(text + '\n');
+  }
+
+  /** Write raw data to the PTY without appending \n. */
+  writeRaw(data: string): void {
+    if (this._state === 'exited') {
+      throw new Error(`Session ${this.id} has exited`);
+    }
+    this.ptyHost.write(data);
+  }
+
+  sendSignal(signal: 'SIGINT' | 'SIGKILL'): void {
+    if (this._state === 'exited') {
+      throw new Error(`Session ${this.id} has exited`);
+    }
+    if (signal === 'SIGINT') {
+      this.ptyHost.write('\x03');
+    } else {
+      this.ptyHost.kill('SIGKILL');
+    }
+  }
+
   resize(cols: number, rows: number): void {
     this.vtb.resize(cols, rows);
     this.ptyHost.resize(cols, rows);
