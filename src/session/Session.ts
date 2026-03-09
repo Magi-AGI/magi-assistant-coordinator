@@ -16,9 +16,13 @@ export class Session {
   private _onSnapshot: ((snapshot: SessionScreen) => void) | null = null;
   private _onExit: ((sessionId: string, code: number) => void) | null = null;
 
+  // Store spawn config for restart
+  private readonly sessionConfig: SessionConfig;
+
   constructor(sessionConfig: SessionConfig, private readonly config: Config) {
     this.id = sessionConfig.id;
     this.name = sessionConfig.name;
+    this.sessionConfig = sessionConfig;
 
     this.vtb = new VirtualTerminalBuffer(
       config.defaultCols,
@@ -128,16 +132,83 @@ export class Session {
     if (this._state === 'exited') {
       throw new Error(`Session ${this.id} has exited`);
     }
-    if (signal === 'SIGINT') {
-      this.ptyHost.write('\x03');
-    } else {
-      this.ptyHost.kill('SIGKILL');
-    }
+    this.ptyHost.kill(signal);
   }
 
   resize(cols: number, rows: number): void {
     this.vtb.resize(cols, rows);
     this.ptyHost.resize(cols, rows);
+  }
+
+  /** Restart an exited session — dispose old PTY/VTB/pipeline and create fresh ones. */
+  restart(): void {
+    if (this._state !== 'exited') {
+      throw new Error(`Cannot restart session ${this.id}: not exited (state=${this._state})`);
+    }
+
+    // Dispose old resources
+    this.pipeline.dispose();
+    this.ptyHost.dispose();
+    this.vtb.dispose();
+
+    // Create fresh VTB, pipeline, PTY
+    this.vtb = new VirtualTerminalBuffer(
+      this.config.defaultCols,
+      this.config.defaultRows,
+      this.config.scrollback,
+    );
+
+    this.pipeline = new SnapshotPipeline(
+      this.id,
+      this.vtb,
+      this.config.debounceMs,
+      Math.round(1000 / this.config.fpsCap),
+      this.config.renderBudgetMs,
+    );
+
+    this.ptyHost = new PtyHost(
+      this.sessionConfig.shell,
+      this.sessionConfig.args,
+      this.sessionConfig.cwd,
+      this.config.defaultCols,
+      this.config.defaultRows,
+    );
+
+    // Re-wire: PTY → VTB
+    this.ptyHost.onData = (data: string) => {
+      this.vtb.write(data);
+      if (this.vtb.pendingBytes > this.config.backpressureBytes) {
+        this.ptyHost.pause();
+      }
+    };
+
+    this.vtb.onWriteParsed = () => {
+      this.pipeline.markDirty();
+      if (this.ptyHost.paused && this.vtb.pendingBytes < this.config.backpressureBytes / 2) {
+        this.ptyHost.resume();
+      }
+    };
+
+    this.pipeline.onSnapshot = (snapshot: SessionScreen) => {
+      this._latestSnapshot = snapshot;
+      this._onSnapshot?.(snapshot);
+    };
+
+    this.ptyHost.onExit = (code: number) => {
+      this._state = 'exited';
+      this._exitCode = code;
+      console.log(`[session:${this.id}] PTY exited with code ${code}`);
+      this._latestSnapshot = this.pipeline.forceSnapshot();
+      this._onSnapshot?.(this._latestSnapshot);
+      this._onExit?.(this.id, code);
+    };
+
+    // Reset state and start
+    this._state = 'running';
+    this._exitCode = null;
+    this._latestSnapshot = null;
+    this.ptyHost.spawn();
+    console.log(`[session:${this.id}] Restarted: ${this.name}`);
   }
 
   dispose(): void {

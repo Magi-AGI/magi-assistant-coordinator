@@ -44,6 +44,7 @@ function mockSessionProvider(): SessionProvider & {
     writeInput() {},
     writeRaw() {},
     sendSignal() {},
+    restartSession() {},
     resizeAll(cols, rows) {
       this.resizeCalls.push({ cols, rows });
     },

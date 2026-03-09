@@ -1,6 +1,7 @@
 import { WebSocketServer as WsServer, type WebSocket } from 'ws';
 import { ClientConnection } from './ClientConnection.js';
 import { RoleManager } from './RoleManager.js';
+import { ClientScreenTracker } from '../vtb/ClientScreenTracker.js';
 import type { Config } from '../config.js';
 import type { ClientMessage, SessionInfo, SessionScreen, Transcript } from '../types/protocol.js';
 import type { CommandClassifier } from '../classify/CommandClassifier.js';
@@ -16,12 +17,14 @@ export interface SessionProvider {
   resizeAll(cols: number, rows: number): void;
   clientConnected(clientId: string): void;
   clientDisconnected(clientId: string): void;
+  restartSession(sessionId: string): void;
 }
 
 export class WebSocketServer {
   private wss: WsServer | null = null;
   private clients = new Map<string, ClientConnection>();
   private roleManager: RoleManager;
+  private screenTracker = new ClientScreenTracker();
 
   private sttBridge: SttBridge | null = null;
   private classifier: CommandClassifier | null = null;
@@ -58,8 +61,12 @@ export class WebSocketServer {
       this.clients.set(client.id, client);
       console.log(`[ws] Client connected: ${client.id}`);
 
-      ws.on('message', (data: Buffer) => {
-        this.handleMessage(client, data);
+      ws.on('message', (data: Buffer, isBinary: boolean) => {
+        if (isBinary) {
+          this.handleBinaryMessage(client, data);
+        } else {
+          this.handleMessage(client, data);
+        }
       });
 
       ws.on('close', () => {
@@ -81,6 +88,7 @@ export class WebSocketServer {
     }
 
     this.clients.delete(client.id);
+    this.screenTracker.resetClient(client.id);
 
     if (client.authenticated) {
       // Handle role transfer on disconnect (may be deferred by grace timer)
@@ -177,6 +185,13 @@ export class WebSocketServer {
         if (!this.requireOperator(client)) return;
         this.handleSessionRaw(client, msg.sessionId, msg.data);
         break;
+      case 'session.resync':
+        this.handleSessionResync(client, msg.sessionId);
+        break;
+      case 'session.restart':
+        if (!this.requireOperator(client)) return;
+        this.handleSessionRestart(client, msg.sessionId);
+        break;
       default:
         client.sendError('UNKNOWN_TYPE', `Unknown message type: ${(msg as any).type}`);
     }
@@ -211,6 +226,13 @@ export class WebSocketServer {
 
     // Set device type (default 'glasses' for backward compat with Phase 1 clients)
     client.deviceType = msg.deviceType || 'glasses';
+
+    // Parse capabilities (Phase 5)
+    if (Array.isArray(msg.caps)) {
+      for (const cap of msg.caps) {
+        if (typeof cap === 'string') client.capabilities.add(cap);
+      }
+    }
 
     // Assign role
     const role = this.roleManager.addClient(client);
@@ -489,6 +511,66 @@ export class WebSocketServer {
     }
   }
 
+  /** Handle binary WebSocket frame: 4-byte BE uint32 seq + raw PCM audio. */
+  private handleBinaryMessage(client: ClientConnection, data: Buffer): void {
+    if (!client.authenticated) {
+      client.sendError('NOT_AUTHENTICATED', 'Send client.hello first');
+      return;
+    }
+    if (!this.requireOperator(client)) return;
+    if (!client.audioStream) {
+      client.sendError('NO_STREAM', 'No active audio stream');
+      return;
+    }
+    if (data.length < 4) {
+      client.sendError('AUDIO_ERROR', 'Binary frame too short');
+      return;
+    }
+
+    client.resetAudioTimeout();
+
+    try {
+      // Skip 4-byte sequence header, rest is raw PCM
+      const pcm = data.subarray(4);
+      client.audioStream.write(pcm);
+    } catch (e: any) {
+      client.sendError('AUDIO_ERROR', e.message);
+    }
+  }
+
+  /** Handle session.resync: clear delta cache and send full frame. */
+  private handleSessionResync(client: ClientConnection, sessionId: string): void {
+    this.screenTracker.resetSession(client.id, sessionId);
+    const snapshot = this.sessionProvider.getLatestSnapshot(sessionId);
+    if (snapshot) {
+      client.send(snapshot);
+    }
+  }
+
+  /** Handle session.restart: restart exited session and broadcast. */
+  private handleSessionRestart(client: ClientConnection, sessionId: string): void {
+    try {
+      this.sessionProvider.restartSession(sessionId);
+
+      // Clear delta caches for ALL clients viewing this session to avoid
+      // stale baseSeq mismatches after the fresh PTY starts producing output
+      for (const c of this.clients.values()) {
+        this.screenTracker.resetSession(c.id, sessionId);
+      }
+
+      // Resize the restarted session to the current operator's grid
+      this.resizeToOperator();
+
+      this.broadcast({
+        type: 'session.restarted',
+        sessionId,
+      });
+      console.log(`[ws] Session restarted: ${sessionId}`);
+    } catch (e: any) {
+      client.sendError('SESSION_ERROR', e.message);
+    }
+  }
+
   /** Broadcast session.exited to ALL authenticated clients (global, per Codex #4). */
   broadcastSessionExited(sessionId: string, exitCode: number): void {
     this.broadcast({
@@ -498,11 +580,42 @@ export class WebSocketServer {
     });
   }
 
-  /** Broadcast a snapshot to all authenticated clients viewing the given session. */
-  broadcastSnapshot(snapshot: SessionScreen): void {
+  /**
+   * Broadcast a screen update to all authenticated clients viewing the given session.
+   * Delta-capable clients get session.screen.delta; others get the full session.screen.
+   */
+  broadcastScreen(snapshot: SessionScreen): void {
     for (const client of this.clients.values()) {
       if (client.authenticated && client.activeSessionId === snapshot.sessionId) {
-        client.send(snapshot);
+        if (client.supportsDelta) {
+          const delta = this.screenTracker.computeDelta(
+            client.id,
+            snapshot.sessionId,
+            snapshot.lines,
+            snapshot.cursor.row,
+            snapshot.cursor.col,
+            snapshot.seq,
+            snapshot.version,
+          );
+          if (delta) {
+            client.send({
+              type: 'session.screen.delta',
+              sessionId: delta.sessionId,
+              changedLines: delta.changedLines,
+              cursorRow: delta.cursorRow,
+              cursorCol: delta.cursorCol,
+              totalLines: delta.totalLines,
+              baseSeq: delta.baseSeq,
+              seq: delta.seq,
+              version: delta.version,
+            });
+          } else {
+            // No cache (first frame) — send full
+            client.send(snapshot);
+          }
+        } else {
+          client.send(snapshot);
+        }
       }
     }
   }

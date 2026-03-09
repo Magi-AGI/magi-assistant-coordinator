@@ -93,6 +93,27 @@ export class SessionManager implements SessionProvider {
     }
   }
 
+  /** Restart an exited session — dispose old PTY and spawn fresh. */
+  restartSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`No session with id: ${sessionId}`);
+    if (session.state !== 'exited') throw new Error(`Session ${sessionId} is still running`);
+
+    session.restart();
+
+    // Re-wire snapshot callback (the new pipeline needs it)
+    session.onSnapshot = (snapshot: SessionScreen) => {
+      this._onSnapshot?.(snapshot);
+    };
+    session.onExit = (sid: string, code: number) => {
+      this.clearKillTimer(sid);
+      this.clearIdleTimer(sid);
+      this._onSessionExit?.(sid, code);
+    };
+
+    console.log(`[sessions] Restarted session: ${sessionId}`);
+  }
+
   /** Track a client connection (call after successful authentication). */
   clientConnected(clientId: string): void {
     this.authenticatedClients.add(clientId);

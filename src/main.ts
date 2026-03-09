@@ -18,9 +18,9 @@ const classifier = new CommandClassifier(
 wsServer.setSttBridge(sttBridge);
 wsServer.setClassifier(classifier);
 
-// Wire snapshot broadcast: session → WebSocket clients
+// Wire snapshot broadcast: session → WebSocket clients (delta-aware)
 sessionManager.onSnapshot = (snapshot) => {
-  wsServer.broadcastSnapshot(snapshot);
+  wsServer.broadcastScreen(snapshot);
 };
 
 // Wire session exit broadcast: session → all WebSocket clients

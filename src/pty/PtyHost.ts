@@ -1,4 +1,5 @@
 import * as pty from 'node-pty';
+import treeKill from 'tree-kill';
 
 export class PtyHost {
   private process: pty.IPty | null = null;
@@ -80,30 +81,32 @@ export class PtyHost {
 
   kill(signal?: string): void {
     if (!this.process) return;
+    const sig = signal || 'SIGTERM';
 
-    try {
-      // For SIGKILL, try to kill the process group to ensure child processes die too.
-      // node-pty's kill() may only kill the shell, leaving children orphaned.
-      if (signal === 'SIGKILL') {
-        const pid = this.process.pid;
-        try {
-          // Kill entire process group (negative PID)
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          // Fallback: process group kill may fail if PID is not a group leader
-          this.process.kill(signal);
+    if (sig === 'SIGINT') {
+      // SIGINT: deliver directly to the PTY foreground process group.
+      // This acts as a normal terminal interrupt (Ctrl+C), not a destructive kill.
+      // node-pty's kill() sends the signal to the PTY child process, which the
+      // terminal driver delivers to the foreground process group.
+      try { this.process.kill(sig); } catch { /* already dead */ }
+    } else {
+      // SIGKILL/SIGTERM: use tree-kill to terminate the entire process tree.
+      const pid = this.process.pid;
+      treeKill(pid, sig, (err) => {
+        if (err) {
+          console.warn(`[pty] tree-kill(${pid}, ${sig}) failed:`, err.message);
+          try { this.process?.kill(signal); } catch { /* already dead */ }
         }
-      } else {
-        this.process.kill(signal);
-      }
-    } catch {
-      // Already dead
+      });
     }
   }
 
   dispose(): void {
     if (this.resizeTimer) clearTimeout(this.resizeTimer);
-    this.kill();
-    this.process = null;
+    if (this.process) {
+      const pid = this.process.pid;
+      treeKill(pid, 'SIGKILL', () => {});
+      this.process = null;
+    }
   }
 }

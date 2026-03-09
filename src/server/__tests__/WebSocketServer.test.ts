@@ -58,6 +58,7 @@ function mockSessionProvider(): SessionProvider & {
     sendSignal(sessionId, signal) {
       this.signalCalls.push({ sessionId, signal });
     },
+    restartSession() {},
     resizeAll(cols, rows) {
       this.resizeCalls.push({ cols, rows });
     },

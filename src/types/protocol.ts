@@ -9,6 +9,7 @@ export interface ClientHello {
   grid: { cols: number; rows: number };
   resumeFromSeq?: number;
   deviceType?: DeviceType; // default 'glasses' for backward compat
+  caps?: string[]; // capability negotiation: 'delta', 'binary_audio'
 }
 
 export interface SessionListRequest {
@@ -73,6 +74,16 @@ export interface SessionRaw {
   data: string; // raw bytes to send to PTY (no \n appended)
 }
 
+export interface SessionResync {
+  type: 'session.resync';
+  sessionId: string;
+}
+
+export interface SessionRestart {
+  type: 'session.restart';
+  sessionId: string;
+}
+
 export type ClientMessage =
   | ClientHello
   | SessionListRequest
@@ -85,7 +96,9 @@ export type ClientMessage =
   | AudioStreamEnd
   | InputConfirm
   | RoleClaim
-  | SessionRaw;
+  | SessionRaw
+  | SessionResync
+  | SessionRestart;
 
 // ── Coordinator → Client ──
 
@@ -198,6 +211,23 @@ export interface SessionExited {
   exitCode: number;
 }
 
+export interface SessionScreenDelta {
+  type: 'session.screen.delta';
+  sessionId: string;
+  changedLines: Record<number, string>;
+  cursorRow: number;
+  cursorCol: number;
+  totalLines: number;
+  baseSeq: number;
+  seq: number;
+  version: number;
+}
+
+export interface SessionRestarted {
+  type: 'session.restarted';
+  sessionId: string;
+}
+
 export type ServerMessage =
   | HelloOk
   | SessionScreen
@@ -213,4 +243,6 @@ export type ServerMessage =
   | ClientJoined
   | ClientLeft
   | SignalAccepted
-  | SessionExited;
+  | SessionExited
+  | SessionScreenDelta
+  | SessionRestarted;

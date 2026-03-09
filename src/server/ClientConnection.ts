@@ -17,6 +17,11 @@ export class ClientConnection {
   role: Role = 'viewer';
   deviceType: DeviceType = 'glasses';
 
+  // Capability negotiation (populated from client.hello caps array)
+  capabilities = new Set<string>();
+  get supportsDelta(): boolean { return this.capabilities.has('delta'); }
+  get supportsBinaryAudio(): boolean { return this.capabilities.has('binary_audio'); }
+
   // Audio stream state
   audioStream: SttStream | null = null;
   audioSessionId: string | null = null;
