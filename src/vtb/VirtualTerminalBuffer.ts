@@ -1,4 +1,5 @@
-import { Terminal } from '@xterm/headless';
+import xterm from '@xterm/headless';
+const { Terminal } = xterm;
 
 export interface ScreenSnapshot {
   lines: string[];
