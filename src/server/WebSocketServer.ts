@@ -254,7 +254,11 @@ export class WebSocketServer {
     if (activeSessionId) {
       const snapshot = this.sessionProvider.getLatestSnapshot(activeSessionId);
       if (snapshot) {
+        const json = JSON.stringify(snapshot);
+        console.log(`[debug:hello] → ${client.id.slice(0,8)} initial snapshot seq=${snapshot.seq} lines=${snapshot.lines.length} json=${json.slice(0,200)}`);
         client.send(snapshot);
+      } else {
+        console.log(`[debug:hello] → ${client.id.slice(0,8)} no snapshot available`);
       }
     }
 
@@ -598,6 +602,8 @@ export class WebSocketServer {
             snapshot.version,
           );
           if (delta) {
+            const changedCount = Object.keys(delta.changedLines).length;
+            console.log(`[debug:broadcast] → ${client.id.slice(0,8)} DELTA seq=${delta.seq} baseSeq=${delta.baseSeq} changed=${changedCount}`);
             client.send({
               type: 'session.screen.delta',
               sessionId: delta.sessionId,
@@ -611,11 +617,15 @@ export class WebSocketServer {
             });
           } else {
             // No cache (first frame) — send full
+            console.log(`[debug:broadcast] → ${client.id.slice(0,8)} FULL seq=${snapshot.seq} lines=${snapshot.lines.length}`);
             client.send(snapshot);
           }
         } else {
+          console.log(`[debug:broadcast] → ${client.id.slice(0,8)} FULL (no delta) seq=${snapshot.seq}`);
           client.send(snapshot);
         }
+      } else if (client.authenticated) {
+        console.log(`[debug:broadcast] SKIP ${client.id.slice(0,8)} activeSession=${client.activeSessionId} snapshot=${snapshot.sessionId}`);
       }
     }
   }

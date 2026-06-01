@@ -20,9 +20,6 @@ export class VirtualTerminalBuffer {
       scrollback,
       allowProposedApi: true,
     });
-
-    // Track when xterm finishes parsing a write batch
-    this.terminal.parser.registerCsiHandler({ final: '' as any }, () => false);
   }
 
   get cols(): number { return this.terminal.cols; }

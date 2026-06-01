@@ -20,6 +20,7 @@ wsServer.setClassifier(classifier);
 
 // Wire snapshot broadcast: session → WebSocket clients (delta-aware)
 sessionManager.onSnapshot = (snapshot) => {
+  console.log(`[debug] Snapshot for session ${snapshot.sessionId}, seq=${snapshot.seq}, lines=${snapshot.lines.length}`);
   wsServer.broadcastScreen(snapshot);
 };
 

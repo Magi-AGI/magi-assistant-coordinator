@@ -48,6 +48,7 @@ export class Session {
 
     // Wire: PTY → VTB
     this.ptyHost.onData = (data: string) => {
+      console.log(`[debug:pty→vtb] session=${this.id} bytes=${data.length}`);
       this.vtb.write(data);
 
       // Backpressure
@@ -59,6 +60,7 @@ export class Session {
 
     // VTB parsed → pipeline
     this.vtb.onWriteParsed = () => {
+      console.log(`[debug:vtb→pipeline] session=${this.id} version=${this.vtb.version}`);
       this.pipeline.markDirty();
 
       // Resume PTY if backpressure relieved (50% threshold)
